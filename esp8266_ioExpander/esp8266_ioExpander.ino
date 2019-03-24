@@ -1,9 +1,11 @@
 #include <ESP8266WiFi.h>
 #include <WiFiUdp.h>
+
+#include <ESP8266WebServer.h>
+#include <ESP8266HTTPUpdateServer.h>
+
 #include <Servo.h>
 #include <Wire.h>
-
-ADC_MODE(ADC_VCC);
 
 /*
    WiFi setting
@@ -19,6 +21,9 @@ unsigned int port = 10000;
 uint8_t buf[4];
 
 WiFiUDP Udp;
+
+ESP8266WebServer Server(80);
+ESP8266HTTPUpdateServer Updater;
 
 /*
    wii remote status
@@ -182,7 +187,9 @@ void connectWiFi(const char* ssid , const char* password) {
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
   WiFi.config(ip, gateway, subnet, dns); //static_ip
+
   delay(100);
+
   WiFi.begin(ssid, password);
 
   uint8_t count = 0;
@@ -190,16 +197,19 @@ void connectWiFi(const char* ssid , const char* password) {
     if (count == WIFI_CONNECT_TIMEOUT) {
       digitalWrite(PILOT, HIGH);
       digitalWrite(BUZZER, HIGH);
-      delay(500);
+
+      delay_alarm(200);
+
       ESP.restart();
     }
 
     count++;
 
-    delay_alarm(200);
+    delay_alarm(500);
   }
 
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    delay_alarm(200);
     delay(5000);
     ESP.restart();
   }
@@ -233,6 +243,7 @@ void getCtrStatus() {
     btn_r = (btn_val & 0x0400) >> 10;
     btn_l = (btn_val & 0x0800) >> 11;
     btn_p = (btn_val & 0x1000) >> 12;
+
     /*
        char str[255];
        sprintf(str, "acc_y: %05d, A: %d, B: %d, -: %d, +: %d, HOME: %d, 1: %d, 2: %d, u: %d, d: %d, l: %d, r: %d\n", acc_y, btn_A, btn_B, btn_m, btn_p, btn_h, btn_1, btn_2, btn_u, btn_d, btn_l, btn_r);
@@ -258,7 +269,6 @@ void setup() {
   servo2.attach(SERVO2);
   servo2.write(120);
 
-
   Wire.begin(4, 5);
 
   Wire.beginTransmission(MCP_ADDR);
@@ -273,6 +283,9 @@ void setup() {
 
   connectWiFi(ssid , password);
 
+  Updater.setup(&Server, "yume", "kobo");
+  Server.begin();
+
   Udp.begin(port);
 
   delay(200);
@@ -284,6 +297,7 @@ void loop() {
     while ((WiFi.status() != WL_CONNECTED)) {
       connectWiFi(ssid , password);
     }
+    Server.handleClient();
 
     byte dataA = M1_STOP | M2_STOP;
     byte dataB = SVN_SEG_0;
@@ -341,9 +355,10 @@ void loop() {
     servo1.write(rad1);
     servo2.write(rad2);
 
-    char str[255];
-    sprintf(str, "%d mV", ESP.getVcc());
-    udpSend(str);
-
+    /*
+        char str[255];
+        sprintf(str, "");
+        udpSend(str);
+    */
   }
 }
