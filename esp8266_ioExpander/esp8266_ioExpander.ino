@@ -53,8 +53,9 @@ bool sw2 = false;
 #define PILOT  16 //pilot lamp pin
 #define BUZZER 13 //buzzer pin
 
-#define SERVO1 12  //servo1 pin
-#define SERVO2 14  //servo2 pin
+// note: GPIO3(RX)はプルアップしたうえでサーボを接続$
+#define SERVO1 1  //servo1 pin
+#define SERVO2 3  //servo2 pin
 
 #define SDA    4  //I2C SDA pin
 #define SCL    5  //I2C SCL pin
@@ -85,12 +86,14 @@ bool sw2 = false;
 #define M2_BACK 0b00010000
 
 /*
-   motor setting
+   servo setting
 */
-#define SERVO1_1 120
-#define SERVO1_2 60
-#define SERVO2_1 120
-#define SERVO2_2 60
+#define SERVO1_START 90
+#define SERVO1_RAD1 120
+#define SERVO1_RAD2 60
+#define SERVO2_START 90
+#define SERVO2_RAD1 120
+#define SERVO2_RAD2 60
 
 /*
    I2C setting
@@ -198,7 +201,7 @@ void connectWiFi(const char* ssid , const char* password) {
       digitalWrite(PILOT, HIGH);
       digitalWrite(BUZZER, HIGH);
 
-      delay_alarm(200);
+      for (uint8_t i; i < 5; i++) delay_alarm(200);
 
       ESP.restart();
     }
@@ -209,8 +212,8 @@ void connectWiFi(const char* ssid , const char* password) {
   }
 
   while (WiFi.waitForConnectResult() != WL_CONNECTED) {
-    delay_alarm(200);
-    delay(5000);
+    for (uint8_t i; i < 5; i++) delay_alarm(200);
+    delay(4000);
     ESP.restart();
   }
 }
@@ -253,6 +256,8 @@ void getCtrStatus() {
 }
 
 void setup() {
+  delay(500);
+
   pinMode(PILOT, OUTPUT);
   digitalWrite(PILOT, HIGH);
 
@@ -261,15 +266,13 @@ void setup() {
   delay(100);
   digitalWrite(BUZZER, LOW);
 
-  //pinMode(1, FUNCTION_3);
   servo1.attach(SERVO1);
-  servo1.write(120);
+  servo1.write(SERVO1_START);
 
-  //pinMode(3, FUNCTION_3);
   servo2.attach(SERVO2);
-  servo2.write(120);
+  servo2.write(SERVO2_START);
 
-  Wire.begin(4, 5);
+  Wire.begin(SDA, SCL);
 
   Wire.beginTransmission(MCP_ADDR);
   Wire.write(IODIRA_ADDR);
@@ -301,8 +304,8 @@ void loop() {
 
     byte dataA = M1_STOP | M2_STOP;
     byte dataB = SVN_SEG_0;
-    static uint8_t rad1 = 120;
-    static uint8_t rad2 = 120;
+    static uint8_t rad1 = SERVO1_START;
+    static uint8_t rad2 = SERVO2_START;
 
     getCtrStatus();
 
@@ -329,17 +332,17 @@ void loop() {
     }
 
     if (btn_1) {
-      rad1 = 60;
+      rad1 = SERVO1_RAD1;
       dataB = SVN_SEG_5;
     } else {
-      rad1 = 120;
+      rad1 = SERVO1_RAD2;
     }
 
     if (btn_2) {
-      rad2 = 60;
+      rad2 = SERVO2_RAD1;
       dataB = SVN_SEG_6;
     } else {
-      rad2 = 120;
+      rad2 = SERVO2_RAD2;
     }
 
     Wire.beginTransmission(MCP_ADDR);
