@@ -7,10 +7,18 @@
 #include <Servo.h>
 #include <Wire.h>
 
+#include <Ticker.h>
+
+Ticker Pwm;
+
+const uint8_t robotNum = 1;
+
+#define ROOT_HTML "<html><head></head><body><p>HELLO FROM ESP #%d<\p><a href=\"/update\">update</a><br><a href=\"/chipdata\">chipdata</a></body></html>"
+
 /*
    WiFi setting
 */
-IPAddress ip(192, 168, 4, 11);
+IPAddress ip(192, 168, 4, 10 + robotNum);
 IPAddress gateway(192, 168, 4, 1);
 IPAddress subnet(255, 255, 255, 0);
 IPAddress dns(192, 168, 4, 1);
@@ -22,7 +30,7 @@ uint8_t buf[4];
 
 WiFiUDP Udp;
 
-ESP8266WebServer Server(80);
+ESP8266WebServer server(80);
 ESP8266HTTPUpdateServer Updater;
 
 /*
@@ -51,11 +59,10 @@ bool sw2 = false;
    pin assignment
 */
 #define PILOT  16 //pilot lamp pin
-#define BUZZER 13 //buzzer pin
+#define BUZZER 14 //buzzer pin
 
-// note: GPIO3(RX)はプルアップしたうえでサーボを接続$
-#define SERVO1 1  //servo1 pin
-#define SERVO2 3  //servo2 pin
+#define SERVO1 12  //servo1 pin
+#define SERVO2 13  //servo2 pin
 
 #define SDA    4  //I2C SDA pin
 #define SCL    5  //I2C SCL pin
@@ -63,37 +70,51 @@ bool sw2 = false;
 /*
    7 segment led setting
 */
-#define SVN_SEG_n 0x00
-#define SVN_SEG_0 0x7D
-#define SVN_SEG_1 0x60
-#define SVN_SEG_2 0x1E
-#define SVN_SEG_3 0x7A
-#define SVN_SEG_4 0x63
-#define SVN_SEG_5 0x5B
-#define SVN_SEG_6 0x5F
-#define SVN_SEG_7 0x71
-#define SVN_SEG_8 0xFF
-#define SVN_SEG_9 0x7B
+#define SVN_SEG_n 0b00000000
+#define SVN_SEG_0 0b01110111
+#define SVN_SEG_1 0b00100001
+#define SVN_SEG_2 0b01101110
+#define SVN_SEG_3 0b01101011
+#define SVN_SEG_4 0b00111001
+//#define SVN_SEG_5 0b00000000
+//#define SVN_SEG_6 0b00000000
+//#define SVN_SEG_7 0b00000000
+//#define SVN_SEG_8 0b00000000
+//#define SVN_SEG_9 0b00000000
 
 /*
    motor setting
 */
-#define M1_STOP 0b11000000
+bool pwm_flag1 = true;
+uint8_t pwm_count1 = 0;
+uint8_t pwm_value1 = 0;
+#define M1_STOP 0b00000000
 #define M1_FORW 0b10000000
 #define M1_BACK 0b01000000
-#define M2_STOP 0b00110000
+
+bool pwm_flag2 = true;
+uint8_t pwm_count2 = 0;
+uint8_t pwm_value2 = 0;
+#define M2_STOP 0b00000000
 #define M2_FORW 0b00100000
 #define M2_BACK 0b00010000
+
+bool pwm_flag3 = true;
+uint8_t pwm_count3 = 0;
+uint8_t pwm_value3 = 0;
+#define M3_STOP 0b00000000
+#define M3_FORW 0b00001000
+#define M3_BACK 0b00000100
 
 /*
    servo setting
 */
-#define SERVO1_START 90
-#define SERVO1_RAD1 120
-#define SERVO1_RAD2 60
-#define SERVO2_START 90
-#define SERVO2_RAD1 120
-#define SERVO2_RAD2 60
+#define SERVO1_START 155
+#define SERVO1_RAD1 50
+#define SERVO1_RAD2 155
+#define SERVO2_START 0
+#define SERVO2_RAD1 0
+#define SERVO2_RAD2 130
 
 /*
    I2C setting
@@ -166,6 +187,75 @@ bool sw2 = false;
 
 Servo servo1, servo2;
 
+void motorStop() {
+  Wire.beginTransmission(MCP_ADDR);
+  Wire.write(GPIOA_ADDR);
+  Wire.write(M1_STOP | M2_STOP | M3_STOP);
+  Wire.endTransmission();
+}
+
+void makeWave(uint8_t *count, bool *flag, uint8_t value) {
+  if (*count == 20) {
+    *flag = true;
+    count = 0;
+  } else if (*count == constrain(value, 0, 20)) {
+    *flag = false;
+  }
+  *count++;
+}
+
+void pwm() {
+  //makeWave(&pwm_count1, &pwm_flag1, pwm_value1);
+  //makeWave(&pwm_count2, &pwm_flag2, pwm_value2);
+
+  if (pwm_count1 == 20) {
+    pwm_flag1 = true;
+    pwm_count1 = 0;
+  } else if (pwm_count1 == constrain(pwm_value1, 0, 20)) {
+    pwm_flag1 = false;
+  }
+  pwm_count1++;
+
+  if (pwm_count2 == 20) {
+    pwm_flag2 = true;
+    pwm_count2 = 0;
+  } else if (pwm_count2 == constrain(pwm_value2, 0, 20)) {
+    pwm_flag2 = false;
+  }
+  pwm_count2++;
+}
+
+void showChipData(char *chipData) {
+  char resetReason[32];
+  ESP.getResetReason().toCharArray(resetReason, 30);
+
+  char coreVersion[12];
+  ESP.getCoreVersion().toCharArray(coreVersion, 30);
+
+  char sketchMD5[128];
+  ESP.getSketchMD5().toCharArray(sketchMD5, 30);
+
+  sprintf(chipData,
+          "<html>"
+          "<p>"
+          "reset reason: %s, free heap: %d, heap fragmentation: %d %%, max free block size %d"
+          "<\p>"
+          "<p>"
+          "chip ID: %d, core version: %d, SDK version: %s, CPU freq: %d MHz, sketch size: %d"
+          "<\p>"
+          "<p>"
+          "free sketch space: %d, sketch MD5: %s, flash chip Id: %d, flash chip size(viewd SDK): %d byte"
+          "<\p>"
+          "<p>"
+          "flash chip size(real one): %d byte, flash chip speed: %d, cycle count: %lu"
+          "<\p>"
+          "<\html>"
+          , resetReason, ESP.getFreeHeap(), ESP.getHeapFragmentation(), ESP.getMaxFreeBlockSize()
+          , ESP.getChipId(), coreVersion, ESP.getSdkVersion(), ESP.getCpuFreqMHz(), ESP.getSketchSize()
+          , ESP.getFreeSketchSpace(), sketchMD5, ESP.getFlashChipId(), ESP.getFlashChipSize()
+          , ESP.getFlashChipRealSize(), ESP.getFlashChipSpeed(), ESP.getCycleCount());
+}
+
 void delay_alarm(uint16_t delay_time) {
   delay_time /= 4;
 
@@ -230,7 +320,7 @@ void getCtrStatus() {
     uint16_t btn_val = 0;
     Udp.read(buf, 4);
 
-    acc_y += ((uint16_t)buf[3] << 8);
+    acc_y = ((uint16_t)buf[3] << 8);
     acc_y += buf[2];
     btn_val += ((uint16_t)buf[1] << 8);
     btn_val += buf[0];
@@ -248,11 +338,60 @@ void getCtrStatus() {
     btn_p = (btn_val & 0x1000) >> 12;
 
     /*
-       char str[255];
-       sprintf(str, "acc_y: %05d, A: %d, B: %d, -: %d, +: %d, HOME: %d, 1: %d, 2: %d, u: %d, d: %d, l: %d, r: %d\n", acc_y, btn_A, btn_B, btn_m, btn_p, btn_h, btn_1, btn_2, btn_u, btn_d, btn_l, btn_r);
-       udpSend(str);
+        char btn_status[255];
+        sprintf(btn_status, "acc_y: % 05d, A: % d, B: % d, -: % d, +: % d, HOME: % d, 1: % d, 2: % d, u: % d, d: % d, l: % d, r: % d\n", acc_y, btn_A, btn_B, btn_m, btn_p, btn_h, btn_1, btn_2, btn_u, btn_d, btn_l, btn_r);
+        udpSend(btn_status);
     */
   }
+}
+
+void report(char *str) {
+  const uint8_t bufSize = 32;
+  char buf[bufSize];
+
+  snprintf(buf, bufSize, "[ESP#%d] %s", robotNum, str);
+
+  udpSend(buf);
+}
+
+void reportVcc() {
+  static uint8_t lowVccCount = 0;
+
+  const uint16_t interval = 1000;
+  static unsigned long previousMillis = 0;
+  unsigned long currentMillis = millis();
+  if (currentMillis - previousMillis >= interval) {
+    previousMillis = currentMillis;
+
+    if (analogRead(A0) * 5.4 < 4000) ++lowVccCount;
+  }
+
+  if (lowVccCount == 10) {
+    motorStop();
+
+    char str[20];
+    sprintf(str, "warn: Vcc LOW %f mV", analogRead(A0) * 5.4);
+    report(str);
+
+    lowVccCount = 0;
+  }
+}
+
+void serverSetup() {
+  Updater.setup(&server, "yume", "kobo");
+  server.begin();
+
+  server.on("/", []() {
+    char html[256];
+    sprintf(html, ROOT_HTML, robotNum);
+    server.send(200, "text/html", html);
+  });
+
+  server.on("/chipdata", []() {
+    char chipData[1024];
+    showChipData(chipData);
+    server.send(200, "text / html", chipData);
+  });
 }
 
 void setup() {
@@ -284,84 +423,140 @@ void setup() {
   Wire.write(0x00);
   Wire.endTransmission();
 
-  connectWiFi(ssid , password);
+  motorStop();
 
-  Updater.setup(&Server, "yume", "kobo");
-  Server.begin();
+  Pwm.attach_ms(1, pwm);
+
+  connectWiFi(ssid , password);
 
   Udp.begin(port);
 
+  serverSetup();
+
   delay(200);
+
+  report("info: start udp");
 }
 
 void loop() {
+  motorStop();
+
+  byte dataA = M1_STOP | M2_STOP | M3_STOP;
+  byte dataB = SVN_SEG_n;
+
+  byte old_dataA = ~dataA; //old_dataA とdataAを異なる値にするため
+  byte old_dataB = ~dataB;
+
+  switch (robotNum) {
+    case 1:
+      dataB = SVN_SEG_1;
+      break;
+    case 2:
+      dataB = SVN_SEG_2;
+      break;
+    case 3:
+      dataB = SVN_SEG_3;
+      break;
+    case 4:
+      dataB = SVN_SEG_4;
+      break;
+  }
 
   while (true) {
     while ((WiFi.status() != WL_CONNECTED)) {
+      motorStop();
       connectWiFi(ssid , password);
     }
-    Server.handleClient();
+    server.handleClient();
 
-    byte dataA = M1_STOP | M2_STOP;
-    byte dataB = SVN_SEG_0;
     static uint8_t rad1 = SERVO1_START;
     static uint8_t rad2 = SERVO2_START;
 
     getCtrStatus();
 
-    Wire.beginTransmission(MCP_ADDR);
-    Wire.write(GPIOA_ADDR); // address PORT B
-    Wire.endTransmission();
-    Wire.requestFrom(MCP_ADDR, 1); // request one byte of data
-    byte gpaRead = Wire.read(); // store incoming byte into "input"
-    sw1 = (gpaRead & 0x03) >> 1;
-    sw2 =  gpaRead & 0x01;
+    /*
+        Wire.beginTransmission(MCP_ADDR);
+        Wire.write(GPIOA_ADDR); // address PORT B
+        Wire.endTransmission();
+        Wire.requestFrom(MCP_ADDR, 1); // request one byte of data
+        byte gpaRead = Wire.read(); // store incoming byte into "input"
+        sw1 = (gpaRead & 0x03) >> 1;
+        sw2 =  gpaRead & 0x01;
+    */
 
-    if (btn_u) {
-      dataA = M1_FORW | M2_FORW;
-      dataB = SVN_SEG_1;
-    } else if (btn_d) {
-      dataA = M1_BACK | M2_BACK;
-      dataB = SVN_SEG_2;
-    } else if (btn_l) {
-      dataA = M1_FORW | M2_BACK;
-      dataB = SVN_SEG_3;
-    } else if (btn_r) {
-      dataA = M1_BACK | M2_FORW;
-      dataB = SVN_SEG_4;
+
+    /*
+        if (btn_u) {
+          dataA = (pwm_flag1) ? (M1_FORW | M2_FORW | M3_STOP) : (M1_STOP | M2_STOP | M3_STOP);
+        } else if (btn_d) {
+          dataA = (pwm_flag1) ? (M1_BACK | M2_BACK | M3_STOP) : (M1_STOP | M2_STOP | M3_STOP);
+        } else if (btn_l) {
+          dataA = (pwm_flag1) ? (M1_FORW | M2_BACK | M3_STOP) : (M1_STOP | M2_STOP | M3_STOP);
+        } else if (btn_r) {
+          dataA = (pwm_flag1) ? (M1_BACK | M2_FORW | M3_STOP) : (M1_STOP | M2_STOP | M3_STOP);
+        } else {
+          dataA = M1_STOP | M2_STOP | M3_STOP;
+        }
+    */
+
+    int8_t Direction  = constrain(map(acc_y, 380, 580, -20, 20), -20, 20);
+    if (Direction >= 0) {
+      pwm_value1 = 20;
+      pwm_value2 = 20 - Direction;
+    } else {
+      pwm_value1 = 20 + Direction;
+      pwm_value2 = 20;
     }
 
-    if (btn_1) {
+    dataA = M1_STOP | M2_STOP | M3_STOP;
+
+    if (btn_2) {
+      dataA = ((pwm_flag1) ? M1_FORW : M1_STOP) | ((pwm_flag2) ? M2_FORW : M2_STOP);
+    } else if (btn_1) {
+      dataA = ((pwm_flag1) ? M1_BACK : M1_STOP) | ((pwm_flag2) ? M2_BACK : M2_STOP);
+    }
+
+    if (btn_l) {
       rad1 = SERVO1_RAD1;
-      dataB = SVN_SEG_5;
     } else {
       rad1 = SERVO1_RAD2;
     }
 
-    if (btn_2) {
+    if (btn_u) {
+      rad1 = SERVO1_RAD1;
+    } else {
+      rad1 = SERVO1_RAD2;
+    }
+
+    if (btn_r) {
       rad2 = SERVO2_RAD1;
-      dataB = SVN_SEG_6;
     } else {
       rad2 = SERVO2_RAD2;
     }
 
-    Wire.beginTransmission(MCP_ADDR);
-    Wire.write(GPIOA_ADDR);
-    Wire.write(dataA);
-    Wire.endTransmission();
+    if (btn_h) {
+      report("HELLO");
+    }
 
-    Wire.beginTransmission(MCP_ADDR);
-    Wire.write(GPIOB_ADDR);
-    Wire.write(dataB);
-    Wire.endTransmission();
+    if (dataA != old_dataA) {
+      Wire.beginTransmission(MCP_ADDR);
+      Wire.write(GPIOA_ADDR);
+      Wire.write(dataA);
+      Wire.endTransmission();
+    }
+    old_dataA = dataA;
+
+    if (dataB != old_dataB) {
+      Wire.beginTransmission(MCP_ADDR);
+      Wire.write(GPIOB_ADDR);
+      Wire.write(dataB);
+      Wire.endTransmission();
+    }
+    old_dataB = dataB;
 
     servo1.write(rad1);
     servo2.write(rad2);
 
-    /*
-        char str[255];
-        sprintf(str, "");
-        udpSend(str);
-    */
+    reportVcc();
   }
 }
